@@ -1,0 +1,55 @@
+#!/usr/bin/env python
+
+import socket as skt
+import sys
+from urlparse import urlparse
+
+name = sys.argv[-1]
+port = 80
+
+host = urlparse(name).hostname
+path = urlparse(name).path
+fileName = sys.argv[-2]
+
+
+Socket = skt.socket(skt.AF_INET, skt.SOCK_STREAM)
+Socket.connect((host, port))
+print "connecting"
+
+def request(path,server):
+	return "GET " + path + " HTTP/1.1\r\nHost: " + server + "\r\n\r\n"
+
+with open(fileName, 'wb') as download:
+	Socket.send(request(path,host))
+	get_header = ""
+	while True:
+		data = Socket.recv(1024)
+		get_header += data
+		if "\r\n\r\n" in data:
+			split_header = get_header.split("\r\n\r\n")
+			# print split_header
+			break
+	
+	header = split_header[0]
+	begin_content = split_header[1]
+	download.write(begin_content)
+	header = header.split()
+	# print header
+	getting_length = header.index("Content-Length:") + 1
+	content_length = header[getting_length]
+	content_length = int(content_length)
+	
+	download_leaw = 0
+	download_leaw +=len(begin_content)
+	while download_leaw < content_length:
+		data = Socket.recv(1024)
+		download_leaw += len(data)
+		print download_leaw, content_length
+		download.write(data)
+		if not data:
+			break
+
+	print "done"
+
+Socket.close()
+
