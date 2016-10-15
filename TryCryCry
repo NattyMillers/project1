@@ -1,0 +1,251 @@
+#!/usr/bin/env python
+
+import socket as skt
+import sys
+from urlparse import urlparse
+import asyncore
+import os.path
+import os
+
+class download_file(object):
+    def __init__(self, url):
+        self.fileName = sys.argv[-2]
+        self.host, self.path, self.port = self.parse_url(url)
+
+        #Download Variable
+        self.get_header = "" #before split header
+        self.header = "" #only header
+        self.getting_length = "" #fine index of 'Content-Length'
+        self.begin_content = "" #content that came with the header
+        self.split_header = "" #split /r/n/r/n to extract only header
+        self.download_leaw = 0 #check bytes(how much it already downloaded)
+        self.last_mod = []
+        self.NL = "\r\n"
+        self.getting_etag = ""
+        self.etag = ""
+
+        #Resume Variable
+        self.old_lastmod = ""
+        self.old_etag = ""
+        self.resume_size = 0
+        self.tail = ""
+        self.tail_info = []
+        self.resume_tail = ""
+
+
+        self.main()
+
+    def check_exists(self):
+        print "Checking exists"
+        if os.path.exists(self.fileName) and os.path.exists(self.fileName+".tail.txt"):
+            self.step_to_resume()
+        else:
+            self.step_to_download()
+
+    def step_to_download(self):
+        #Create and connect socket
+        self.Socket = skt.socket(skt.AF_INET, skt.SOCK_STREAM)
+        self.Socket.connect((self.host, self.port))
+
+        if os.path.exists(self.fileName) == False:             
+            print "Normal Download"
+            self.request = self.make_request("GET", self.path, {"HOST": self.host, "Connection": "close"})
+            self.Socket.send(self.request)
+            print "connecting"
+            self.handle_header()
+            self.handle_content_length()
+            self.handle_last_modified()
+
+            self.old_lastmod = self.last_mod
+            self.handle_etag()
+
+            self.old_etag = self.etag
+            self.download_main_content()
+            self.check_finish()
+
+    def step_to_resume(self):
+        if os.path.exists(self.fileName) and os.path.exists(self.fileName+".tail.txt"):
+            self.Socket = skt.socket(skt.AF_INET, skt.SOCK_STREAM)
+            self.Socket.connect((self.host, self.port))
+            self.getting_tail()
+            # print "Resume Download"
+            # print type(self.byte), self.byte
+            # bite = int(self.byte) + 1
+            self.res_req = self.resume_request(self.path, self.host, self.byte)
+            # print "kumlung sent"
+            self.Socket.send(self.res_req)
+            # print "send leaw"
+            self.handle_header()
+            # print self.header
+            self.handle_etag()
+            # print self.etag
+            self.resume_download()
+            self.check_finish()
+
+    def getting_tail(self):
+        with open(self.fileName+".tail.txt", "r") as f:
+            for line in f:
+                self.tail_info.append(line)
+            f.close()
+
+            self.byte = self.tail_info[3]
+            self.etag = self.tail_info[0]
+            self.last_mod = self.tail_info[1]
+            self.content_length = self.tail_info[2]
+
+            self.resume_tail = self.etag + self.last_mod + self.content_length + self.byte 
+
+        with open(self.fileName+".tail.txt", "w") as f:
+            f.write(self.resume_tail)
+
+
+    def make_request(self, req_type, what, details, ver="1.1"):
+        req_line = "{verb} {w} HTTP/{v}".format(verb=req_type, w=what, v=ver)
+        details = ["{name}: {v}".format(name=n,v=v) for (n,v) in details.iteritems()]
+        # print details, 'natty'
+        detail_lines = self.NL.join(details)
+        # print "=======", detail_lines
+        full_request = "".join([req_line, self.NL, detail_lines, self.NL, self.NL])
+        return full_request
+
+    def resume_request(self, path, server, bytes):
+        return ("GET {p} HTTP/1.1\r\nHost: {s}\r\nConnection: close\r\nRange: bytes={b}-\r\n\r\n").format(p=path,s=server,b=bytes)
+        #      ("GET {n} HTTP/1.1\r\n"+ "Host: {s}\r\n"+"Connection: close\r\n"+"Range: bytes={b}-\r\n\r\n").format(n=self.path,s=self.url,b=self.headByte)        pass
+
+    def parse_url(self, url, DEFAULT_PORT=80):
+        parsed_url = urlparse(url)
+        host, path, port = (parsed_url.hostname,parsed_url.path,parsed_url.port)
+        if not port:
+            port = DEFAULT_PORT
+        return (host, path, port)
+
+    def handle_header(self):
+        self.f = open(self.fileName, 'wb')
+        while True:
+            data = self.Socket.recv(1024)
+            self.get_header += data
+            if "\r\n\r\n" in data:
+                self.split_header = self.get_header.split("\r\n\r\n")
+                break
+        if "Content-Length" in self.split_header[0]:
+            self.header = self.split_header[0] #split the header to extract the content-length
+            self.begin_content = self.split_header[1]
+            # if self.begin_content != ' ':
+            self.f.write(self.begin_content)
+            self.header = self.header.split()
+            print "self.header", self.header
+
+    def handle_content_length(self):
+        self.getting_length = self.header.index('Content-Length:')
+        self.getting_length = int(self.getting_length) + 1
+        content_l = self.header[self.getting_length]
+        self.content_length = int(content_l)
+        print "content_Length", self.content_length
+
+    def handle_last_modified(self):
+        if "Last-Modified:" in self.header:
+            space = " "
+            self.getting_mod = self.header.index('Last-Modified:')
+            self.getting_mod = int(self.getting_mod)
+            self.stop = self.getting_mod + 6
+            for everything in range(self.getting_mod, self.stop):
+                self.last_mod.append(self.header[everything])
+            self.last_mod = space.join(self.last_mod)
+        else:
+            pass
+        # return self.last_mod
+
+    def handle_etag(self):
+        if "ETag:" in self.header:
+            self.getting_etag = self.header.index('ETag:')
+            self.getting_etag = self.getting_etag + 1
+            etag_index = self.header[self.getting_etag]
+            self.etag = etag_index
+        else:
+            pass
+        # print "etaggggggggggg",self.etag
+        # print type(self.etag)
+
+    def download_main_content(self):
+        self.tail = self.etag + self.NL + self.last_mod + self.NL + str(self.content_length) + self.NL
+        # print "=======",self.last_mod
+        self.download_leaw +=len(self.begin_content)
+        try:
+            counter = 0
+            with open(self.fileName+".tail.txt", "wb") as f:
+                while True and counter<4:#self.download_leaw < self.content_length: #this loop will break if the len(data) equal to content length 
+                    data = self.Socket.recv(1024)
+                    self.f.write(data) #in this loop we write or download the data/content
+                    self.download_leaw += len(data)
+                    # print self.download_leaw, self.content_length
+                    counter += 1
+                    if not data:
+                        break
+                f.write(self.tail) 
+                f.write(str(self.download_leaw))
+                f.close()
+        except KeyboardInterrupt:
+            self.socket.close()
+
+    def resume_download(self):
+        # pass
+        with open(self.fileName, "wb") as self.f:
+            # self.resume_size = os.path.getsize(self.fileName)
+            #     print self.resume_size
+            #     f = open(fileName, "a+")
+            try:
+                count = 0
+                while True:
+                    resume_data = self.Socket.recv(1024)
+                    self.f.write(resume_data)
+                    count += len(resume_data)
+                    if not resume_data:
+                        break
+                # print 'count',count
+            except KeyboardInterrupt:
+                self.socket.close()
+        with open(self.fileName+".tail.txt", "r") as f:
+            tail_info = []
+            for line in f:
+                tail_info.append(line)
+            f.close()
+            byte = int(tail_info[3]) + count
+            etag = tail_info[0]
+            last_mod = tail_info[1]
+            content_length = tail_info[2]
+
+            resume_tail = etag + last_mod + content_length + str(byte) 
+
+        with open(self.fileName+".tail.txt", "wb") as f:
+            f.write(resume_tail)    
+
+    def check_tail_file(self):
+        with open(self.fileName+".tail.txt", "r") as f:
+            cwd = os.getcwd()
+            lst = []
+            for each in f:
+                lst.append(each)
+            content_l = lst[2]
+            byte = lst[3]
+            # print content_l, byte
+            if int(content_l) == int(byte):
+                # print "hey"
+                os.remove(cwd + "/" + self.fileName+".tail.txt")
+
+    def check_finish(self):
+        self.check_tail_file()
+        if os.path.exists(self.fileName+".tail.txt") == False:
+            print "Successfully Download the file"
+            self.f.close()
+            self.Socket.close()
+        else:
+            print "The file can't be download properly. Check your internet connection."
+
+
+    def main(self):
+        self.check_exists()
+
+servName = sys.argv[-1]
+download_file(servName)
+
+
