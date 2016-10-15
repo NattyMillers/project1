@@ -38,8 +38,10 @@ class download_file(object):
     def check_exists(self):
         print "Checking exists"
         if os.path.exists(self.fileName) and os.path.exists(self.fileName+".tail.txt"):
+            # print "yaya"
             self.step_to_resume()
         else:
+            # print "yoyo"
             self.step_to_download()
 
     def step_to_download(self):
@@ -71,7 +73,9 @@ class download_file(object):
             # print "Resume Download"
             # print type(self.byte), self.byte
             # bite = int(self.byte) + 1
+            # print "self.byte========", self.byte
             self.res_req = self.resume_request(self.path, self.host, self.byte)
+            # print "========", self.res_req
             # print "kumlung sent"
             self.Socket.send(self.res_req)
             # print "send leaw"
@@ -97,6 +101,7 @@ class download_file(object):
 
         with open(self.fileName+".tail.txt", "w") as f:
             f.write(self.resume_tail)
+            f.close()
 
 
     def make_request(self, req_type, what, details, ver="1.1"):
@@ -109,6 +114,7 @@ class download_file(object):
         return full_request
 
     def resume_request(self, path, server, bytes):
+        # print "hallo"
         return ("GET {p} HTTP/1.1\r\nHost: {s}\r\nConnection: close\r\nRange: bytes={b}-\r\n\r\n").format(p=path,s=server,b=bytes)
         #      ("GET {n} HTTP/1.1\r\n"+ "Host: {s}\r\n"+"Connection: close\r\n"+"Range: bytes={b}-\r\n\r\n").format(n=self.path,s=self.url,b=self.headByte)        pass
 
@@ -120,27 +126,28 @@ class download_file(object):
         return (host, path, port)
 
     def handle_header(self):
-        self.f = open(self.fileName, 'wb')
-        while True:
-            data = self.Socket.recv(1024)
-            self.get_header += data
-            if "\r\n\r\n" in data:
-                self.split_header = self.get_header.split("\r\n\r\n")
-                break
-        if "Content-Length" in self.split_header[0]:
-            self.header = self.split_header[0] #split the header to extract the content-length
-            self.begin_content = self.split_header[1]
-            # if self.begin_content != ' ':
-            self.f.write(self.begin_content)
-            self.header = self.header.split()
-            print "self.header", self.header
+        with open(self.fileName, 'wb') as self.f:
+            while True:
+                data = self.Socket.recv(1024)
+                self.get_header += data
+                if "\r\n\r\n" in data:
+                    self.split_header = self.get_header.split("\r\n\r\n")
+                    break
+            # print "split_header", self.split_header
+            if "Content-Length" in self.split_header[0]:
+                self.header = self.split_header[0] #split the header to extract the content-length
+                self.begin_content = self.split_header[1]
+                # if self.begin_content != ' ':
+                self.f.write(self.begin_content)
+                self.header = self.header.split()
+                # print "self.header", self.header
 
     def handle_content_length(self):
         self.getting_length = self.header.index('Content-Length:')
         self.getting_length = int(self.getting_length) + 1
         content_l = self.header[self.getting_length]
         self.content_length = int(content_l)
-        print "content_Length", self.content_length
+        # print "content_Length", self.content_length
 
     def handle_last_modified(self):
         if "Last-Modified:" in self.header:
@@ -170,26 +177,34 @@ class download_file(object):
         self.tail = self.etag + self.NL + self.last_mod + self.NL + str(self.content_length) + self.NL
         # print "=======",self.last_mod
         self.download_leaw +=len(self.begin_content)
+        # print "download_leaw", self.download_leaw
+        tail_file = open(self.fileName+".tail.txt", "wb")
         try:
             counter = 0
-            with open(self.fileName+".tail.txt", "wb") as f:
-                while True and counter<4:#self.download_leaw < self.content_length: #this loop will break if the len(data) equal to content length 
+            with open(self.fileName, 'wb') as self.f:
+                while True:# and counter<4:#self.download_leaw < self.content_length: #this loop will break if the len(data) equal to content length 
                     data = self.Socket.recv(1024)
                     self.f.write(data) #in this loop we write or download the data/content
                     self.download_leaw += len(data)
                     # print self.download_leaw, self.content_length
-                    counter += 1
+                    # counter += 1
                     if not data:
+                        "break leaw na"
                         break
-                f.write(self.tail) 
-                f.write(str(self.download_leaw))
-                f.close()
+                tail_file.write(self.tail) 
+                tail_file.write(str(self.download_leaw))
+                tail_file.close()
+                # print "after download: download_leaw", self.download_leaw
+                # print "filesize1",os.path.getsize(self.fileName)
+            self.f.close()
+
         except KeyboardInterrupt:
-            self.socket.close()
+            pass
+            # self.socket.close()
 
     def resume_download(self):
-        # pass
-        with open(self.fileName, "wb") as self.f:
+        # print "filesize2",os.path.getsize(self.fileName)
+        with open(self.fileName, "a+") as f:
             # self.resume_size = os.path.getsize(self.fileName)
             #     print self.resume_size
             #     f = open(fileName, "a+")
@@ -197,19 +212,24 @@ class download_file(object):
                 count = 0
                 while True:
                     resume_data = self.Socket.recv(1024)
-                    self.f.write(resume_data)
+                    f.write(resume_data)
                     count += len(resume_data)
                     if not resume_data:
                         break
                 # print 'count',count
+                # print "filesize2after",os.path.getsize(self.fileName)
             except KeyboardInterrupt:
-                self.socket.close()
+                pass
+                # self.socket.close()
+            f.close()
         with open(self.fileName+".tail.txt", "r") as f:
             tail_info = []
             for line in f:
                 tail_info.append(line)
             f.close()
+            # print "byte in resume before + count", tail_info[3]
             byte = int(tail_info[3]) + count
+            # print "byte in resume download + count", byte
             etag = tail_info[0]
             last_mod = tail_info[1]
             content_length = tail_info[2]
@@ -217,7 +237,8 @@ class download_file(object):
             resume_tail = etag + last_mod + content_length + str(byte) 
 
         with open(self.fileName+".tail.txt", "wb") as f:
-            f.write(resume_tail)    
+            f.write(resume_tail)   
+            f.close() 
 
     def check_tail_file(self):
         with open(self.fileName+".tail.txt", "r") as f:
@@ -227,6 +248,7 @@ class download_file(object):
                 lst.append(each)
             content_l = lst[2]
             byte = lst[3]
+            f.close()
             # print content_l, byte
             if int(content_l) == int(byte):
                 # print "hey"
