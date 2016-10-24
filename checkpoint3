@@ -1,0 +1,199 @@
+#!/usr/bin/env python   
+
+import socket as skt
+import sys
+from urlparse import urlparse
+import os.path
+import os
+import threading
+
+def parse_url(url, DEFAULT_PORT=80):
+    parsed_url = urlparse(url)
+    host, path, port = (parsed_url.hostname,parsed_url.path,parsed_url.port)
+    if not port:
+        port = DEFAULT_PORT
+    return (host, path, port)
+
+def create_socket(url):
+    host, path, port = parse_url(url)
+    Socket = skt.socket(skt.AF_INET, skt.SOCK_STREAM)
+    Socket.connect((host, port))
+    return Socket
+
+#=========================================== Request =================================================#
+
+def resume_request(url, start_byte, end_byte):
+    host, path, port = parse_url(url)
+    return "GET " + path + " HTTP/1.1\r\nHost: " + host + "\r\n" + "Connection: Close" + "\r\n" + "Range: bytes=" + start_byte + "-" + end_byte + "\r\n\r\n"
+
+def request(url, start_byte):
+    host, path, port = parse_url(url)
+    return "GET " + path + " HTTP/1.1\r\nHost: " + host + "\r\n" + "Connection: Close" + "\r\n" + "Range: bytes=" + start_byte + "-" + "\r\n\r\n"
+
+#============================================== Tail File ===============================================#
+
+def get_byte(fileName):
+    if os.path.exists(fileName+".tail.txt") == False or os.path.getsize(fileName+".tail.txt") == 0:
+        byte = 0
+        return byte
+    elif os.path.getsize(fileName+".tail.txt") > 0:
+        with open(fileName+".tail.txt", "r") as f:
+            lst = []
+            for each in f:
+                lst.append(each)
+        byte = lst[1]
+        return byte
+
+def delete_tail_file(fileName):
+    with open(fileName+".tail.txt", "r") as f:
+        cwd = os.getcwd()
+        lst = []
+        for each in f:
+            lst.append(each)
+    content_l = lst[0]
+    byte = lst[1]
+    if int(content_l) == int(byte):
+        os.remove(cwd + "/" + fileName+".tail.txt")
+
+#============================================== Download ===============================================#
+
+def download_without_thread(url): #normal download
+    fileName = sys.argv[-2]
+    content_length = handle_content_length(url)
+    byte = get_byte(fileName)
+    byte = int(byte)
+    try:
+        get_header = ""
+        with open(fileName, 'a+') as f:
+            Socket = create_socket(url)
+            Socket.send(request(url, str(byte)))
+            while True:
+                data = Socket.recv(1)
+                get_header += data
+                if "\r\n\r\n" in get_header:
+                    break
+            while True:
+                data = Socket.recv(8192)
+                f.write(data)
+                byte += len(data)
+                if not data:
+                    break  
+        open(fileName+".tail.txt", "wb").write(str(content_length) + "\r\n" + str(byte))  
+        Socket.close() 
+        delete_tail_file(fileName) 
+    except KeyboardInterrupt:
+        open(fileName+".tail.txt", "wb").write(str(content_length) + "\r\n" + str(byte))
+        delete_tail_file(fileName)  
+
+def download_file(url, fileName, start, stop): #download using thread, use resume request
+    # byte_count = 0
+    get_header = ""
+    with open(fileName, 'a+') as f:
+        Socket = create_socket(url)
+        Socket.send(resume_request(url, str(start), str(stop)))
+        while True:
+            data = Socket.recv(1)
+            get_header += data
+            if "\r\n\r\n" in get_header:
+                #split_header = get_header.split("\r\n\r\n")
+                break
+        #begin_content = split_header[1]
+        #f.write(begin_content)
+        while True:
+            data = Socket.recv(8192)
+            # byte_count+=len(data)
+            f.write(data)
+            if not data:
+                break   
+    # print byte_count 
+    Socket.close()
+
+#=========================================== Ranges and Threads =============================================#
+
+def manage_boss(url, Connection,file_name): # start and stop range of boss
+    content_length = handle_content_length(url)
+    Connection = int(Connection)
+    divider = content_length//Connection
+    underling_divider = divider//Connection
+
+    #========Boss========#
+    start_boss =[0] + [(x*divider)+1 for x in range(1,Connection)]
+    stop_boss = [ x+divider for x in start_boss]
+    stop_boss = [stop_boss[0]] + [stop_boss[x]-1 for x in range(1,len(stop_boss)-1)] + [content_length - 1]
+    #print 'start_boss:',start_boss
+    #print 'stop_boss:',stop_boss
+
+    boss_pair = [(i,j) for i,j in zip(start_boss,stop_boss)]
+    for i in range(Connection): #send each (start,stop) of boss to find underling ranges
+        manage_underling(url, Connection, boss_pair[i], underling_divider,file_name)
+
+def manage_underling(url, Connection, boss_range, underling_divider,file_name): #manage start and stop range of underling
+    #=======Underling========#
+    start_underling = []
+    
+    start_underling = [(boss_range[0]+(underling_divider * x)) for x in range(0, Connection-1)] + [boss_range[1]-underling_divider]
+    stop_underling = [start_underling[j]-1 for j in range(1, Connection)] + [boss_range[1]]
+
+    f_name = ["tail_"+file_name+str(x) for x in range(Connection)]
+    Threads = []
+
+    for i,j,k,f in zip(range(Connection),start_underling,stop_underling,f_name): #create thread and run in this loop
+        t = threading.Thread(target=download_file,args=(url,f,j,k)) #url,filename, start,stop
+        #print i,j[boss_i],k[boss_i],f
+        Threads.append(t)
+        # print("threading.Thread(target=download_file,args=({a},{b},{c},{d}").format(a=url,b=f,c=j,d=k)
+        t.start()
+        # print"-------------------------"
+    for i in Threads:
+        i.join()
+    clean_n_mix(f_name,file_name)
+
+def clean_n_mix(files, outfile):  # this function clean up the underling files, credit: stackoverflow dot com
+    curr = os.getcwd()
+    with open(outfile, 'a+') as f:
+        for fn in files:
+            with open(fn) as infile:
+                for i in infile:
+                    f.write(i)
+            os.remove(curr + "/" + fn)
+    print "Successfully download the file"
+
+#============================================ Header =================================================#
+
+def handle_header(url): #extract header out
+    Socket = create_socket(url)
+    Socket.send(request(url,str(0)))
+    get_header = ""
+    while True:
+        data = Socket.recv(8192)
+        get_header += data
+        if "\r\n\r\n" in data:
+            split_header = get_header.split("\r\n\r\n")
+            break
+    if "Content-Length: " in split_header[0]:
+        header = split_header[0]
+    Socket.close()
+    return header
+
+def handle_content_length(url): #extract content length, use handle_header function
+    header= handle_header(url)
+    header = header.split()
+    getting_cl_index = header.index('Content-Length:')
+    getting_cl_index = int(getting_cl_index) + 1
+    content_l = header[getting_cl_index]
+    content_length = int(content_l)
+    return content_length
+
+#============================================= Main ==================================================#
+
+def main(url): #mangae which function to use
+    # download_file(url)
+    if len(sys.argv) == 4 : #normal download without thread but resumable
+        download_without_thread(url)
+    elif len(sys.argv) == 5 : #thread download with default port=5
+        manage_boss(url, 5, sys.argv[-3])
+    elif len(sys.argv) == 6 : #thread download with port given 
+        manage_boss(url, sys.argv[-2], sys.argv[-4])
+
+url = sys.argv[-1]
+main(url)
