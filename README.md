@@ -8,4 +8,4 @@
 
 `./short -o <filename> -c <url>` - download with default connections(5)
 
-`./srget -o <filename> -c <connections> <url>` - download with connections given
+`./short -o <filename> -c <connections> <url>` - download with connections given
